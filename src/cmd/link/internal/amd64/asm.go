@@ -273,11 +273,12 @@ func adddynrel(ctxt *ld.Link, s *ld.Symbol, r *ld.Reloc) bool {
 			// At this point symbol addresses have not been
 			// assigned yet (as the final size of the .rela section
 			// will affect the addresses), and so we cannot write
-			// the Elf64_Rela.r_offset now. Instead we delay it
-			// until after the 'address' phase of the linker is
-			// complete. We do this via Addaddrplus, which creates
-			// a new R_ADDR relocation which will be resolved in
-			// the 'reloc' phase.
+			// the Elf64_Rela.r_offset or r_addend (which contains
+			// the offset of targ) now. Instead we delay it until
+			// after the 'address' phase of the linker is complete.
+			// We do this via Addaddrplus, which creates a new
+			// R_ADDR relocation which will be resolved in the
+			// 'reloc' phase.
 			//
 			// These synthetic static R_ADDR relocs must be skipped
 			// now, or else we will be caught in an infinite loop
@@ -307,19 +308,23 @@ func adddynrel(ctxt *ld.Link, s *ld.Symbol, r *ld.Reloc) bool {
 		}
 
 		if ld.Iself {
-			// TODO: We generate a R_X86_64_64 relocation for every R_ADDR, even
-			// though it would be more efficient (for the dynamic linker) if we
-			// generated R_X86_RELATIVE instead.
-			ld.Adddynsym(ctxt, targ)
+			if r.Siz != 8 {
+				ld.Errorf(s, "unexpected small R_ADDR reloc: %v", r)
+			}
 			rela := ctxt.Syms.Lookup(".rela", 0)
 			ld.Addaddrplus(ctxt, rela, s, int64(r.Off))
-			if r.Siz == 8 {
+			if targ.Type == ld.SDYNIMPORT {
+				// This symbol is truly external; resolve it in
+				// the dynamic linker.
+				ld.Adddynsym(ctxt, targ)
 				ld.Adduint64(ctxt, rela, ld.ELF64_R_INFO(uint32(targ.Dynid), ld.R_X86_64_64))
+				ld.Adduint64(ctxt, rela, uint64(r.Add))
 			} else {
-				// TODO: never happens, remove.
-				ld.Adduint64(ctxt, rela, ld.ELF64_R_INFO(uint32(targ.Dynid), ld.R_X86_64_32))
+				// We will know the offset in reloc(), so use
+				// the cheap X86_64_RELATIVE.
+				ld.Adduint64(ctxt, rela, ld.ELF64_R_INFO(0, ld.R_X86_64_RELATIVE))
+				ld.Addaddrplus(ctxt, rela, targ, r.Add)
 			}
-			ld.Adduint64(ctxt, rela, uint64(r.Add))
 			r.Type = 256 // ignore during relocsym
 			return true
 		}
